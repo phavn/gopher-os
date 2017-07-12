@@ -3,6 +3,7 @@ package console
 import (
 	"gopheros/device"
 	"gopheros/device/video/console/font"
+	"gopheros/device/video/console/logo"
 	"gopheros/kernel"
 	"gopheros/kernel/hal/multiboot"
 	"gopheros/kernel/kfmt"
@@ -70,9 +71,60 @@ func NewVesaFbConsole(width, height uint32, bpp uint8, pitch uint32, colorInfo *
 
 // SetFont selects a bitmap font to be used by the console.
 func (cons *VesaFbConsole) SetFont(f *font.Font) {
+	if f == nil {
+		return
+	}
+
 	cons.font = f
 	cons.widthInChars = cons.width / uint32(f.GlyphWidth)
 	cons.heightInChars = (cons.height - cons.offsetY) / uint32(f.GlyphHeight)
+}
+
+// SetLogo selects the logo to be displayed by the console. The logo colors will
+// be remapped to the end of the console's palette and space equal to the logo
+// height will be reserved at the top of the framebuffer for diplaying the logo.
+//
+// As setting a logo changes the available space for rendering text, SetLogo
+// must be invoked before SetFont.
+func (cons *VesaFbConsole) SetLogo(logo *logo.Image) {
+	if logo == nil {
+		return
+	}
+
+	cons.offsetY = logo.Height
+
+	// Map the logo colors to the console palette replacing the transparent
+	// color index with the console default bg color
+	offset := uint8(len(cons.palette) - len(logo.Palette))
+	for i, rgba := range logo.Palette {
+		if uint8(i) == logo.TransparentIndex {
+			rgba = cons.palette[cons.defaultBg].(color.RGBA)
+		}
+		cons.setPaletteColor(uint8(i)+offset, rgba, false)
+	}
+
+	// Draw the logo
+	fbRowOffset := cons.fbOffset(0, 0)
+
+	for y, logoOffset := uint32(0), 0; y < logo.Height; y, fbRowOffset = y+1, fbRowOffset+cons.pitch {
+		for x, fbOffset := uint32(0), fbRowOffset; x < logo.Width; x, fbOffset, logoOffset = x+1, fbOffset+cons.bytesPerPixel, logoOffset+1 {
+			c := logo.Data[logoOffset] + offset
+
+			switch cons.bpp {
+			case 8:
+				cons.fb[fbOffset] = c
+			case 15, 16:
+				colorComp := cons.packColor16(c)
+				cons.fb[fbOffset] = colorComp[0]
+				cons.fb[fbOffset+1] = colorComp[1]
+			case 24, 32:
+				colorComp := cons.packColor24(c)
+				cons.fb[fbOffset] = colorComp[0]
+				cons.fb[fbOffset+1] = colorComp[1]
+				cons.fb[fbOffset+2] = colorComp[2]
+			}
+		}
+	}
 }
 
 // Dimensions returns the console width and height in the specified dimension.
@@ -379,6 +431,14 @@ func (cons *VesaFbConsole) SetPaletteColor(index uint8, rgba color.RGBA) {
 		return
 	}
 
+	cons.setPaletteColor(index, rgba, true)
+}
+
+// setPaletteColor updates the color definition for the specified
+// palette index. If replace is true, then all occurences of the old color
+// in the framebuffer will be replaced by the new color value (if bpp > 8).
+func (cons *VesaFbConsole) setPaletteColor(index uint8, rgba color.RGBA, replace bool) {
+	oldColor := cons.palette[index]
 	cons.palette[index] = rgba
 
 	switch cons.bpp {
@@ -390,13 +450,13 @@ func (cons *VesaFbConsole) SetPaletteColor(index uint8, rgba color.RGBA) {
 		portWriteByteFn(0x3c9, rgba.G>>2)
 		portWriteByteFn(0x3c9, rgba.B>>2)
 	case 15, 16:
-		if oldColor == nil {
+		if oldColor == nil || !replace {
 			return
 		}
 
 		cons.replace16(oldColor.(color.RGBA), rgba)
 	case 24, 32:
-		if oldColor == nil {
+		if oldColor == nil || !replace {
 			return
 		}
 

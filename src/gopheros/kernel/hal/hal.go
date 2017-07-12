@@ -6,6 +6,7 @@ import (
 	"gopheros/device/tty"
 	"gopheros/device/video/console"
 	"gopheros/device/video/console/font"
+	"gopheros/device/video/console/logo"
 	"gopheros/kernel/hal/multiboot"
 	"gopheros/kernel/kfmt"
 )
@@ -32,6 +33,10 @@ func DetectHardware() {
 	consoles := probe(console.ProbeFuncs)
 	if len(consoles) != 0 {
 		devices.activeConsole = consoles[0].(console.Device)
+
+		if logoSetter, ok := (devices.activeConsole).(console.LogoSetter); ok {
+			logoSetter.SetLogo(logo.ConsoleLogo)
+		}
 
 		if fontSetter, ok := (devices.activeConsole).(console.FontSetter); ok {
 			consW, consH := devices.activeConsole.Dimensions(console.Pixels)
